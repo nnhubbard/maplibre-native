@@ -822,14 +822,18 @@ public:
     [_singleTapGestureRecognizer requireGestureRecognizerToFail:_quickZoom];
     [self addGestureRecognizer:_singleTapGestureRecognizer];
 
+    // observe scene activity
+    //
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(sceneDidEnterBackground:) name:UISceneDidEnterBackgroundNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(sceneWillDeactivate:) name:UISceneWillDeactivateNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(sceneDidActivate:) name:UISceneDidActivateNotification object:nil];
+    
     // observe app activity
     //
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(willTerminate) name:UIApplicationWillTerminateNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(willResignActive:) name:UIApplicationWillResignActiveNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(didEnterBackground:) name:UIApplicationDidEnterBackgroundNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(willEnterForeground:) name:UIApplicationWillEnterForegroundNotification object:nil];
-    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(didBecomeActive:) name:UIApplicationDidBecomeActiveNotification object:nil];
-
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(appWillTerminate) name:UIApplicationWillTerminateNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(appDidEnterBackground:) name:UIApplicationDidEnterBackgroundNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(appWillResignActive:) name:UIApplicationWillResignActiveNotification object:nil];
+    
     // Pending completion blocks are called *after* annotation views have been updated
     // in updateFromDisplayLink.
     _pendingCompletionBlocks = [NSMutableArray array];
@@ -1482,7 +1486,7 @@ public:
     self.needsDisplayRefresh = YES;
 }
 
-- (void)willTerminate
+- (void)appWillTerminate
 {
     MLNAssertIsMainThread();
 
@@ -1501,6 +1505,11 @@ public:
     }
 
     [self destroyCoreObjects];
+    
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"debugCachlyValidateLocationServices"
+                              object:self
+                            userInfo:@{@"message": @"appWillTerminate",
+                                     @"isDormant": @(self.dormant)}];
 }
 
 - (UIScreen *)windowScreen {
@@ -1830,8 +1839,57 @@ public:
 }
 
 // MARK: - Application lifecycle
-- (void)willResignActive:(NSNotification *)notification
+- (BOOL)isCurrentScene:(id)scene {
+    
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wundeclared-selector"
+    if ([scene respondsToSelector:@selector(carWindow)]) {
+        
+        id carWindow = [scene performSelector:@selector(carWindow)];
+        if ([carWindow isEqual:self.window]) {
+            return YES;
+        }
+        
+    } else if ([scene respondsToSelector:@selector(windows)]) {
+        
+        id windows = [scene performSelector:@selector(windows)];
+        if ([windows containsObject:self.window]) {
+            return YES;
+        }
+        
+    }
+#pragma clang diagnostic pop
+    
+    return NO;
+    
+}
+
+- (void)sceneWillDeactivate:(NSNotification *)notification {
+    
+    if (![self isCurrentScene:notification.object]) return;
+    
+    [self willResignActive];
+    
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"debugCachlyValidateLocationServices"
+                              object:self
+                            userInfo:@{@"message": @"sceneWillResignActive",
+                                     @"isDormant": @(self.dormant)}];
+    
+}
+- (void)appWillResignActive:(NSNotification *)notification
 {
+    
+    [self willResignActive];
+    
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"debugCachlyValidateLocationServices"
+                              object:self
+                            userInfo:@{@"message": @"appWillResignActive",
+                                     @"isDormant": @(self.dormant)}];
+    
+}
+
+- (void)willResignActive {
+    
     MLNAssertIsMainThread();
     MLNLogDebug(@"[%p]", self);
 
@@ -1852,10 +1910,36 @@ public:
     {
         _rendererFrontend->reduceMemoryUse();
     }
+    
 }
 
-- (void)didEnterBackground:(NSNotification *)notification
+- (void)sceneDidEnterBackground:(NSNotification *)notification {
+    
+    if (![self isCurrentScene:notification.object]) return;
+    
+    [self didEnterBackground];
+    
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"debugCachlyValidateLocationServices"
+                              object:self
+                            userInfo:@{@"message": @"sceneDidEnterBackground",
+                                     @"isDormant": @(self.dormant)}];
+    
+}
+
+- (void)appDidEnterBackground:(NSNotification *)notification
 {
+    
+    [self didEnterBackground];
+    
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"debugCachlyValidateLocationServices"
+                              object:self
+                            userInfo:@{@"message": @"appDidEnterBackground",
+                                     @"isDormant": @(self.dormant)}];
+    
+}
+
+- (void)didEnterBackground {
+    
     MLNAssertIsMainThread();
     MLNAssert(!self.dormant, @"Should not be dormant heading into background");
     MLNLogDebug(@"[%p] dormant=%d", self, self.dormant);
@@ -1919,14 +2003,22 @@ public:
     [self validateLocationServices];
 }
 
-- (void)didBecomeActive:(NSNotification *)notification
+- (void)sceneDidActivate:(NSNotification *)notification
 {
+    
+    if (![self isCurrentScene:notification.object]) return;
+
     MLNLogDebug(@"[%p] DL.paused=<%p>.paused=%d", self, self.displayLink, self.displayLink.paused);
 
     // Most times, we should already have a display link created at this point,
     // which may or may not be running. However, at the start of the application,
     // it's possible to have a situation where the display link hasn't been created.
     [self resumeRenderingIfNecessary];
+    
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"debugCachlyValidateLocationServices"
+                              object:self
+                            userInfo:@{@"message": @"sceneDidActivate",
+                                     @"isDormant": @(self.dormant)}];
 }
 
 // MARK: - GL / display link wake/sleep
@@ -2962,7 +3054,7 @@ static void *windowScreenContext = &windowScreenContext;
         if ([keyPath isEqualToString:@"screen"] ||
             [keyPath isEqualToString:@"windowScene"]) {
             [self destroyDisplayLink];
-            [self didBecomeActive:nil];
+            [self sceneDidActivate:nil];
         }
     }
 }
@@ -5842,6 +5934,12 @@ static void *windowScreenContext = &windowScreenContext;
 - (void)validateLocationServices
 {
     BOOL shouldEnableLocationServices = self.showsUserLocation && !self.dormant;
+    
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"debugCachlyValidateLocationServices"
+                              object:self
+                            userInfo:@{@"shouldEnableLocationServices": @(shouldEnableLocationServices),
+                                     @"isDormant": @(self.dormant)}];
+
 
     if (shouldEnableLocationServices)
     {
