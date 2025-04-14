@@ -77,6 +77,8 @@
 #if TARGET_IPHONE_SIMULATOR & (TARGET_CPU_X86 | TARGET_CPU_X86_64)
 #include <sys/sysctl.h>
 
+#define SUPPORT_UIWINDOWSCENE YES
+
 // The m1 simulator's gesture's velocity is wrong and here is a workaround to fix it.
 // These custom gestures will calculate the correct velocity.
 // This may because the system time is incorrect.
@@ -1974,8 +1976,13 @@ public:
     [self validateLocationServices];
 }
 
-- (void)willEnterForeground:(NSNotification *)notification
+- (void)sceneDidActivate:(NSNotification *)notification
 {
+    
+    if (![self isCurrentScene:notification.object]) return;
+
+    MLNLogDebug(@"[%p] DL.paused=<%p>.paused=%d", self, self.displayLink, self.displayLink.paused);
+    
     MLNLogDebug(@"[%p] dormant=%d", self, self.dormant);
 
     // We're transitioning from Background to Inactive states
@@ -2001,14 +2008,6 @@ public:
     self.dormant = NO;
 
     [self validateLocationServices];
-}
-
-- (void)sceneDidActivate:(NSNotification *)notification
-{
-    
-    if (![self isCurrentScene:notification.object]) return;
-
-    MLNLogDebug(@"[%p] DL.paused=<%p>.paused=%d", self, self.displayLink, self.displayLink.paused);
 
     // Most times, we should already have a display link created at this point,
     // which may or may not be running. However, at the start of the application,
@@ -5934,12 +5933,6 @@ static void *windowScreenContext = &windowScreenContext;
 - (void)validateLocationServices
 {
     BOOL shouldEnableLocationServices = self.showsUserLocation && !self.dormant;
-    
-    [[NSNotificationCenter defaultCenter] postNotificationName:@"debugCachlyValidateLocationServices"
-                              object:self
-                            userInfo:@{@"shouldEnableLocationServices": @(shouldEnableLocationServices),
-                                     @"isDormant": @(self.dormant)}];
-
 
     if (shouldEnableLocationServices)
     {
@@ -5970,7 +5963,6 @@ static void *windowScreenContext = &windowScreenContext;
         }
 
         [self.locationManager startUpdatingLocation];
-
         [self validateUserHeadingUpdating];
     }
     else if ( ! shouldEnableLocationServices && self.locationManager)
