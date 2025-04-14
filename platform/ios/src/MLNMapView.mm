@@ -829,6 +829,7 @@ public:
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(sceneDidEnterBackground:) name:UISceneDidEnterBackgroundNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(sceneWillDeactivate:) name:UISceneWillDeactivateNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(sceneDidActivate:) name:UISceneDidActivateNotification object:nil];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(willEnterForeground:) name:UISceneWillEnterForegroundNotification object:nil];
     
     // observe app activity
     //
@@ -1976,12 +1977,9 @@ public:
     [self validateLocationServices];
 }
 
-- (void)sceneDidActivate:(NSNotification *)notification
-{
+- (void)willEnterForeground:(NSNotification *)notification {
     
     if (![self isCurrentScene:notification.object]) return;
-
-    MLNLogDebug(@"[%p] DL.paused=<%p>.paused=%d", self, self.displayLink, self.displayLink.paused);
     
     MLNLogDebug(@"[%p] dormant=%d", self, self.dormant);
 
@@ -2008,6 +2006,15 @@ public:
     self.dormant = NO;
 
     [self validateLocationServices];
+    
+}
+
+- (void)sceneDidActivate:(NSNotification *)notification
+{
+    
+    if (![self isCurrentScene:notification.object]) return;
+
+    MLNLogDebug(@"[%p] DL.paused=<%p>.paused=%d", self, self.displayLink, self.displayLink.paused);
 
     // Most times, we should already have a display link created at this point,
     // which may or may not be running. However, at the start of the application,
