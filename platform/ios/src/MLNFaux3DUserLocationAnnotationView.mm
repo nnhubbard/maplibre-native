@@ -12,8 +12,8 @@
 const CGFloat MLNUserLocationAnnotationDotSize = 22.0;
 const CGFloat MLNUserLocationAnnotationHaloSize = 115.0;
 
-const CGFloat MLNUserLocationAnnotationPuckSize = 45.0;
-const CGFloat MLNUserLocationAnnotationArrowSize = MLNUserLocationAnnotationPuckSize * 0.5;
+const CGFloat MLNUserLocationAnnotationPuckSize = 35.0;
+const CGFloat MLNUserLocationAnnotationArrowSize = MLNUserLocationAnnotationPuckSize * 0.4;
 
 const CGFloat MLNUserLocationHeadingUpdateThreshold = 0.01;
 
@@ -24,7 +24,7 @@ const CGFloat MLNUserLocationApproximateZoomThreshold = 7.0;
     BOOL _puckModeActivated;
     BOOL _approximateModeActivated;
 
-    CALayer *_puckDot;
+    CAShapeLayer *_puckDot;
     CAShapeLayer *_puckArrow;
 
     CALayer<MLNUserLocationHeadingIndicator> *_headingIndicatorLayer;
@@ -222,10 +222,16 @@ const CGFloat MLNUserLocationApproximateZoomThreshold = 7.0;
     if ( ! _puckDot)
     {
         _puckDot = [self circleLayerWithSize:MLNUserLocationAnnotationPuckSize];
-        _puckDot.backgroundColor = [[UIColor whiteColor] CGColor];
+        _puckDot.backgroundColor = [arrowColor CGColor];
         _puckDot.shadowColor = [puckShadowColor CGColor];
         _puckDot.shadowOpacity = shadowOpacity;
         _puckDot.shadowPath = [[UIBezierPath bezierPathWithOvalInRect:_puckDot.bounds] CGPath];
+        _puckDot.rasterizationScale = [UIScreen mainScreen].scale;
+        _puckDot.shouldRasterize = YES;
+        _puckDot.drawsAsynchronously = YES;
+        
+        _puckDot.borderWidth = 3.0f;
+        _puckDot.borderColor = [[UIColor whiteColor] CGColor];
 
         if (self.mapView.camera.pitch)
         {
@@ -246,11 +252,11 @@ const CGFloat MLNUserLocationApproximateZoomThreshold = 7.0;
     {
         _puckArrow = [CAShapeLayer layer];
         _puckArrow.path = [[self puckArrow] CGPath];
-        _puckArrow.fillColor = [arrowColor CGColor];
+        _puckArrow.fillColor = [[UIColor whiteColor] CGColor];
         _puckArrow.bounds = CGRectMake(0, 0, round(MLNUserLocationAnnotationArrowSize), round(MLNUserLocationAnnotationArrowSize));
         _puckArrow.position = CGPointMake(CGRectGetMidX(super.bounds), CGRectGetMidY(super.bounds));
-        _puckArrow.shouldRasterize = YES;
         _puckArrow.rasterizationScale = [UIScreen mainScreen].scale;
+        _puckArrow.shouldRasterize = YES;
         _puckArrow.drawsAsynchronously = YES;
 
         _puckArrow.lineJoin = @"round";
@@ -602,11 +608,11 @@ const CGFloat MLNUserLocationApproximateZoomThreshold = 7.0;
     }
 }
 
-- (CALayer *)circleLayerWithSize:(CGFloat)layerSize
+- (CAShapeLayer *)circleLayerWithSize:(CGFloat)layerSize
 {
     layerSize = round(layerSize);
 
-    CALayer *circleLayer = [CALayer layer];
+    CAShapeLayer *circleLayer = [CAShapeLayer layer];
     circleLayer.bounds = CGRectMake(0, 0, layerSize, layerSize);
     circleLayer.position = CGPointMake(CGRectGetMidX(super.bounds), CGRectGetMidY(super.bounds));
     circleLayer.cornerRadius = layerSize / 2.0;
