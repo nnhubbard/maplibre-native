@@ -12,7 +12,7 @@
 const CGFloat MLNUserLocationAnnotationDotSize = 22.0;
 const CGFloat MLNUserLocationAnnotationHaloSize = 115.0;
 
-const CGFloat MLNUserLocationAnnotationPuckSize = 35.0;
+const CGFloat MLNUserLocationAnnotationPuckSize = 30.0;
 const CGFloat MLNUserLocationAnnotationArrowSize = MLNUserLocationAnnotationPuckSize * 0.4;
 
 const CGFloat MLNUserLocationHeadingUpdateThreshold = 0.01;
