@@ -5841,7 +5841,7 @@ static void *windowScreenContext = &windowScreenContext;
 
 - (void)validateLocationServices
 {
-    BOOL shouldEnableLocationServices = self.showsUserLocation && !self.dormant;
+    BOOL shouldEnableLocationServices = self.showsUserLocation;
 
     if (shouldEnableLocationServices)
     {
