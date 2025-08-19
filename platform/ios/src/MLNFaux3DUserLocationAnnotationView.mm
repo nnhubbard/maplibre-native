@@ -117,7 +117,7 @@ const CGFloat MLNUserLocationApproximateZoomThreshold = 7.0;
     if (_puckModeActivated)
     {
         _puckArrow.fillColor = [puckArrowFillColor CGColor];
-        _puckArrow.strokeColor = [puckArrowStrokeColor CGColor];
+        _puckArrow.strokeColor = [[UIColor whiteColor] CGColor];
     }
     else if (_approximateModeActivated)
     {
@@ -206,6 +206,7 @@ const CGFloat MLNUserLocationApproximateZoomThreshold = 7.0;
     }
 
     UIColor *arrowColor = self.mapView.tintColor;
+    UIColor *puckColor = self.mapView.tintColor;
     UIColor *puckShadowColor = UIColor.blackColor;
     CGFloat shadowOpacity = 0.25;
 
@@ -214,6 +215,7 @@ const CGFloat MLNUserLocationApproximateZoomThreshold = 7.0;
         MLNUserLocationAnnotationViewStyle *style = [self.mapView.delegate mapViewStyleForDefaultUserLocationAnnotationView:self.mapView];
         arrowColor = style.puckArrowFillColor ? style.puckArrowFillColor : arrowColor;
         puckShadowColor = style.puckShadowColor ? style.puckShadowColor : puckShadowColor;
+        puckColor = style.puckFillColor ? style.puckFillColor : puckColor;
         shadowOpacity = style.puckShadowOpacity;
     }
 
@@ -222,7 +224,7 @@ const CGFloat MLNUserLocationApproximateZoomThreshold = 7.0;
     if ( ! _puckDot)
     {
         _puckDot = [self circleLayerWithSize:MLNUserLocationAnnotationPuckSize];
-        _puckDot.backgroundColor = [arrowColor CGColor];
+        _puckDot.backgroundColor = [puckColor CGColor];
         _puckDot.shadowColor = [puckShadowColor CGColor];
         _puckDot.shadowOpacity = shadowOpacity;
         _puckDot.shadowPath = [[UIBezierPath bezierPathWithOvalInRect:_puckDot.bounds] CGPath];
@@ -252,7 +254,7 @@ const CGFloat MLNUserLocationApproximateZoomThreshold = 7.0;
     {
         _puckArrow = [CAShapeLayer layer];
         _puckArrow.path = [[self puckArrow] CGPath];
-        _puckArrow.fillColor = [[UIColor whiteColor] CGColor];
+        _puckArrow.fillColor = [arrowColor CGColor];
         _puckArrow.bounds = CGRectMake(0, 0, round(MLNUserLocationAnnotationArrowSize), round(MLNUserLocationAnnotationArrowSize));
         _puckArrow.position = CGPointMake(CGRectGetMidX(super.bounds), CGRectGetMidY(super.bounds));
         _puckArrow.rasterizationScale = [UIScreen mainScreen].scale;
@@ -261,7 +263,7 @@ const CGFloat MLNUserLocationApproximateZoomThreshold = 7.0;
 
         _puckArrow.lineJoin = @"round";
         _puckArrow.lineWidth = 1.f;
-        _puckArrow.strokeColor = _puckArrow.fillColor;
+        _puckArrow.strokeColor = [[UIColor whiteColor] CGColor];
 
         [self.layer addSublayer:_puckArrow];
     }
