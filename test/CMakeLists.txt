@@ -18,6 +18,7 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/math/minmax.test.cpp
     ${PROJECT_SOURCE_DIR}/test/math/wrap.test.cpp
     ${PROJECT_SOURCE_DIR}/test/platform/settings.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/plugin/plugin.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/image_manager.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/pattern_atlas.test.cpp
     ${PROJECT_SOURCE_DIR}/test/renderer/shader_registry.test.cpp
@@ -50,6 +51,7 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/style/conversion/light.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/padding.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/property_value.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/style/conversion/raster_dem_options.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/stringify.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/conversion/tileset.test.cpp
     ${PROJECT_SOURCE_DIR}/test/style/expression/dependency.test.cpp
@@ -84,7 +86,9 @@ add_library(
     ${PROJECT_SOURCE_DIR}/test/tile/tile_cache.test.cpp
     ${PROJECT_SOURCE_DIR}/test/tile/tile_coordinate.test.cpp
     ${PROJECT_SOURCE_DIR}/test/tile/tile_id.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/tile/tile_lod.test.cpp
     ${PROJECT_SOURCE_DIR}/test/tile/vector_tile.test.cpp
+    ${PROJECT_SOURCE_DIR}/test/util/action_journal.test.cpp
     ${PROJECT_SOURCE_DIR}/test/util/async_task.test.cpp
     ${PROJECT_SOURCE_DIR}/test/util/bounding_volumes.test.cpp
     ${PROJECT_SOURCE_DIR}/test/util/camera.test.cpp
@@ -144,10 +148,6 @@ if(MLN_WITH_OPENGL)
             ${PROJECT_SOURCE_DIR}/test/renderer/backend_scope.test.cpp
             ${PROJECT_SOURCE_DIR}/test/util/offscreen_texture.test.cpp
     )
-    target_compile_definitions(
-        mbgl-test
-        PRIVATE MLN_RENDER_BACKEND_OPENGL=1
-    )
 endif()
 
 
@@ -159,17 +159,6 @@ if(MLN_WITH_VULKAN)
             ${PROJECT_SOURCE_DIR}/test/api/custom_drawable_layer.test.cpp
             ${PROJECT_SOURCE_DIR}/test/renderer/backend_scope.test.cpp
             ${PROJECT_SOURCE_DIR}/test/util/offscreen_texture.test.cpp
-    )
-    target_compile_definitions(
-        mbgl-test
-        PRIVATE MLN_RENDER_BACKEND_VULKAN=1
-    )
-endif()
-
-if(MLN_WITH_METAL)
-    target_compile_definitions(
-        mbgl-test
-        PRIVATE MLN_RENDER_BACKEND_METAL=1
     )
 endif()
 
@@ -238,7 +227,7 @@ target_link_libraries(
     mbgl-test
     PRIVATE
         ${MLN_CORE_PRIVATE_LIBRARIES}
-        MapLibreNative::Base::Extras::args
+        mbgl-vendor-args
         MapLibreNative::Base::pixelmatch-cpp
         mbgl-compiler-options
         mbgl-vendor-cpp-httplib

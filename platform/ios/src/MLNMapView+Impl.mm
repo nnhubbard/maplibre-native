@@ -79,9 +79,9 @@ void MLNMapViewImpl::onWillStartRenderingFrame() {
     [mapView mapViewWillStartRenderingFrame];
 }
 
-void MLNMapViewImpl::onDidFinishRenderingFrame(mbgl::MapObserver::RenderFrameStatus status) {
-    bool fullyRendered = status.mode == mbgl::MapObserver::RenderMode::Full;
-    [mapView mapViewDidFinishRenderingFrameFullyRendered:fullyRendered frameEncodingTime:status.frameEncodingTime frameRenderingTime:status.frameRenderingTime];
+void MLNMapViewImpl::onDidFinishRenderingFrame(const mbgl::MapObserver::RenderFrameStatus& status) {
+    const bool fullyRendered = status.mode == mbgl::MapObserver::RenderMode::Full;
+    [mapView mapViewDidFinishRenderingFrameFullyRendered:fullyRendered renderingStats:status.renderingStats];
 }
 
 void MLNMapViewImpl::onWillStartRenderingMap() {
@@ -166,7 +166,7 @@ void MLNMapViewImpl::onGlyphsRequested(const mbgl::FontStack& fontStack, const m
 void MLNMapViewImpl::onTileAction(mbgl::TileOperation operation, const mbgl::OverscaledTileID& tile, const std::string& sourceID) {
     [mapView tileDidTriggerAction:MLNTileOperation(static_cast<int>(operation))
                                 x:tile.canonical.x
-                                y:tile.canonical.x
+                                y:tile.canonical.y
                                 z:tile.canonical.z
                              wrap:tile.wrap
                       overscaledZ:tile.overscaledZ

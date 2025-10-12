@@ -202,7 +202,8 @@ GeometryTile::GeometryTile(const OverscaledTileID& id_,
              parameters.mode,
              parameters.pixelRatio,
              parameters.debugOptions & MapDebugOptions::Collision,
-             parameters.dynamicTextureAtlas),
+             parameters.dynamicTextureAtlas,
+             parameters.glyphManager->getFontFaces()),
       fileSource(parameters.fileSource),
       glyphManager(parameters.glyphManager),
       imageManager(parameters.imageManager),
@@ -373,10 +374,48 @@ void GeometryTile::onError(std::exception_ptr err, const uint64_t resultCorrelat
     observer->onTileError(*this, std::move(err));
 }
 
-void GeometryTile::onGlyphsAvailable(GlyphMap glyphs) {
+void GeometryTile::onGlyphsAvailable(GlyphMap glyphMap, [[maybe_unused]] HBShapeRequests requests) {
     MLN_TRACE_FUNC();
 
-    worker.self().invoke(&GeometryTileWorker::onGlyphsAvailable, std::move(glyphs));
+    HBShapeResults results;
+#ifdef MLN_TEXT_SHAPING_HARFBUZZ
+    for (auto& fontStackIT : requests) {
+        auto fontStack = fontStackIT.first;
+        auto& fontTypes = fontStackIT.second;
+        for (auto& typesIT : fontTypes) {
+            auto type = typesIT.first;
+            auto& strs = typesIT.second;
+
+            for (auto& str : strs) {
+                std::vector<GlyphID> shapedGlyphIDs;
+                std::shared_ptr<std::vector<HBShapeAdjust>> shapedAdjusts =
+                    std::make_shared<std::vector<HBShapeAdjust>>();
+                glyphManager->hbShaping(str, fontStack, type, shapedGlyphIDs, *shapedAdjusts);
+                std::u16string shapedstr;
+
+                shapedstr.reserve(shapedGlyphIDs.size());
+                for (auto& glyphID : shapedGlyphIDs) {
+                    shapedstr += glyphID.complex.code;
+
+                    auto fontStackHash = FontStackHasher()(fontStack);
+                    bool needShape = true;
+                    if (glyphMap.find(fontStackHash) != glyphMap.end()) {
+                        auto& glyphs = glyphMap[fontStackHash];
+                        if (glyphs.find(glyphID) != glyphs.end()) needShape = false;
+                    }
+                    if (needShape) {
+                        auto glyph = glyphManager->getGlyph(fontStack, glyphID);
+                        glyphMap[fontStackHash].emplace(glyph->id, glyph);
+                    }
+                }
+
+                results[fontStack][type][str] = HBShapeResult{shapedstr,
+                                                              shapedAdjusts}; //.emplace(str, shapedstr, shapedAdjusts);
+            }
+        }
+    }
+#endif // MLN_TEXT_SHAPING_HARFBUZZ
+    worker.self().invoke(&GeometryTileWorker::onGlyphsAvailable, std::move(glyphMap), std::move(results));
 }
 
 void GeometryTile::getGlyphs(GlyphDependencies glyphDependencies) {
@@ -542,18 +581,16 @@ void GeometryTile::performedFadePlacement() {
 void GeometryTile::setFeatureState(const LayerFeatureStates& states) {
     MLN_TRACE_FUNC();
 
-    auto layers = getData();
+    const auto layers = getData();
     if ((layers == nullptr) || states.empty() || !layoutResult) {
         return;
     }
 
-    auto& layerIdToLayerRenderData = layoutResult->layerRenderData;
-    for (auto& layer : layerIdToLayerRenderData) {
-        const auto& layerID = layer.first;
-        const auto sourceLayer = layers->getLayer(layerID);
-        if (sourceLayer) {
-            const auto& sourceLayerID = sourceLayer->getName();
-            auto entry = states.find(sourceLayerID);
+    for (auto& layerIdToLayerRenderData = layoutResult->layerRenderData;
+         auto& [layerID, renderData] : layerIdToLayerRenderData) {
+        std::string sourceLayerId = renderData.layerProperties->baseImpl->sourceLayer;
+        if (const auto sourceLayer = layers->getLayer(sourceLayerId)) {
+            auto entry = states.find(sourceLayerId);
             if (entry == states.end()) {
                 continue;
             }
@@ -561,9 +598,7 @@ void GeometryTile::setFeatureState(const LayerFeatureStates& states) {
             if (featureStates.empty()) {
                 continue;
             }
-
-            auto bucket = layer.second.bucket;
-            if (bucket && bucket->hasData()) {
+            if (const auto bucket = renderData.bucket; bucket && bucket->hasData()) {
                 bucket->update(featureStates, *sourceLayer, layerID, layoutResult->imageAtlas.patternPositions);
             }
         }

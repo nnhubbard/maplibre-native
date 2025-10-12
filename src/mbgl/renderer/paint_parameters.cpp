@@ -55,7 +55,10 @@ PaintParameters::PaintParameters(gfx::Context& context_,
                                  RenderStaticData& staticData_,
                                  LineAtlas& lineAtlas_,
                                  PatternAtlas& patternAtlas_,
-                                 uint64_t frameCount_)
+                                 uint64_t frameCount_,
+                                 double tileLodMinRadius_,
+                                 double tileLodScale_,
+                                 double tileLodPitchThreshold_)
     : context(context_),
       backend(backend_),
       encoder(context.createCommandEncoder()),
@@ -70,7 +73,10 @@ PaintParameters::PaintParameters(gfx::Context& context_,
       timePoint(timePoint_),
       pixelRatio(pixelRatio_),
       shaders(*staticData_.shaders),
-      frameCount(frameCount_) {
+      frameCount(frameCount_),
+      tileLodMinRadius(tileLodMinRadius_),
+      tileLodScale(tileLodScale_),
+      tileLodPitchThreshold(tileLodPitchThreshold_) {
     pixelsToGLUnits = {{2.0f / state.getSize().width, -2.0f / state.getSize().height}};
 
     if (state.getViewportMode() == ViewportMode::FlippedY) {
@@ -150,7 +156,7 @@ void PaintParameters::clearStencil() {
     vulkanRenderPass.clearStencil();
 
     context.renderingStats().stencilClears++;
-#else // !MLN_RENDER_BACKEND_METAL
+#elif MLN_RENDER_BACKEND_OPENGL
     context.clearStencilBuffer(0b00000000);
 #endif
 }
@@ -241,7 +247,7 @@ void PaintParameters::renderTileClippingMasks(const RenderTiles& renderTiles) {
         vulkanContext.renderingStats().stencilUpdates++;
     }
 
-#else  // MLN_RENDER_BACKEND_OPENGL
+#elif MLN_RENDER_BACKEND_OPENGL
     auto program = staticData.shaders->getLegacyGroup().get<ClippingMaskProgram>();
 
     if (!program) {

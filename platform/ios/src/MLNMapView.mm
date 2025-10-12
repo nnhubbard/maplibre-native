@@ -15,6 +15,7 @@
 #include <mbgl/style/layers/custom_layer.hpp>
 #include <mbgl/renderer/renderer.hpp>
 #include <mbgl/math/wrap.hpp>
+#include <mbgl/util/action_journal.hpp>
 #include <mbgl/util/client_options.hpp>
 #include <mbgl/util/exception.hpp>
 #include <mbgl/util/geo.hpp>
@@ -25,6 +26,13 @@
 #include <mbgl/util/run_loop.hpp>
 #include <mbgl/util/string.hpp>
 #include <mbgl/util/projection.hpp>
+#include <mbgl/layermanager/layer_manager.hpp>
+#include <mbgl/plugin/plugin_layer_factory.hpp>
+#include <mbgl/plugin/plugin_layer.hpp>
+#include <mbgl/plugin/plugin_layer_impl.hpp>
+#include <mbgl/renderer/paint_parameters.hpp>
+#include <mbgl/mtl/mtl_fwd.hpp>
+#include <mbgl/mtl/render_pass.hpp>
 
 #import "Mapbox.h"
 #import "MLNShape_Private.h"
@@ -67,8 +75,13 @@
 #import "MLNLoggingConfiguration_Private.h"
 #import "MLNNetworkConfiguration_Private.h"
 #import "MLNReachability.h"
+#import "MLNRenderingStats_Private.h"
 #import "MLNSettings_Private.h"
+#import "MLNActionJournalOptions_Private.h"
 #import "MLNMapProjection.h"
+#import "MLNPluginLayer.h"
+#import "MLNStyleLayerManager.h"
+#include "MLNPluginStyleLayer_Private.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -439,6 +452,9 @@ public:
 @property (nonatomic) CADisplayLink *displayLink;
 @property (nonatomic, assign) BOOL needsDisplayRefresh;
 
+// Plugin Layers
+@property NSMutableArray *pluginLayers;
+
 @end
 
 @implementation MLNMapView
@@ -493,6 +509,8 @@ public:
     CFTimeInterval _frameCounterStartTime;
     NSInteger _frameCount;
     CFTimeInterval _frameDurations;
+
+    MLNRenderingStats* _renderingStats;
 }
 
 // MARK: - Setup & Teardown -
@@ -503,7 +521,7 @@ public:
     {
         MLNLogInfo(@"Starting %@ initialization.", NSStringFromClass([self class]));
         MLNLogDebug(@"Initializing frame: %@", NSStringFromCGRect(frame));
-        [self commonInit];
+        [self commonInitWithOptions:nil];
         self.styleURL = nil;
         MLNLogInfo(@"Finalizing %@ initialization.", NSStringFromClass([self class]));
     }
@@ -516,7 +534,7 @@ public:
     {
         MLNLogInfo(@"Starting %@ initialization.", NSStringFromClass([self class]));
         MLNLogDebug(@"Initializing frame: %@ styleURL: %@", NSStringFromCGRect(frame), styleURL);
-        [self commonInit];
+        [self commonInitWithOptions:nil];
         self.styleURL = styleURL;
         MLNLogInfo(@"Finalizing %@ initialization.", NSStringFromClass([self class]));
     }
@@ -529,9 +547,42 @@ public:
     {
         MLNLogInfo(@"Starting %@ initialization.", NSStringFromClass([self class]));
         MLNLogDebug(@"Initializing frame: %@ styleJSON: %@", NSStringFromCGRect(frame), styleJSON);
-        [self commonInit];
+        [self commonInitWithOptions:nil];
         self.styleJSON = styleJSON;
         _initialStyleJSON = [styleJSON copy];
+        MLNLogInfo(@"Finalizing %@ initialization.", NSStringFromClass([self class]));
+    }
+    return self;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame options:(MLNMapOptions *)options
+{
+    if (self = [super initWithFrame:frame])
+    {
+        MLNLogInfo(@"Starting %@ initialization.", NSStringFromClass([self class]));
+        MLNLogDebug(@"Initializing frame: %@ with options", NSStringFromCGRect(frame));
+        [self commonInitWithOptions:options];
+
+        if (options)
+        {
+            if (options.pluginLayers) {
+                for (Class c in options.pluginLayers) {
+                    [self addPluginLayerType:c];
+                }
+            }
+
+            if (options.styleURL) {
+                self.styleURL = options.styleURL;
+            } else if (options.styleJSON) {
+                self.styleJSON = options.styleJSON;
+                _initialStyleJSON = [options.styleJSON copy];
+            } else {
+                self.styleURL = nil;
+            }
+        } else {
+            self.styleURL = nil;
+        }
+
         MLNLogInfo(@"Finalizing %@ initialization.", NSStringFromClass([self class]));
     }
     return self;
@@ -542,7 +593,7 @@ public:
     if (self = [super initWithCoder:decoder])
     {
         MLNLogInfo(@"Starting %@ initialization.", NSStringFromClass([self class]));
-        [self commonInit];
+        [self commonInitWithOptions:nil];
         self.styleURL = nil;
         MLNLogInfo(@"Finalizing %@ initialization.", NSStringFromClass([self class]));
     }
@@ -621,8 +672,13 @@ public:
     return _rendererFrontend->getRenderer();
 }
 
-- (void)commonInit
+- (void)commonInitWithOptions:(MLNMapOptions*)mlnMapoptions
 {
+    if (mlnMapoptions == nil)
+    {
+        mlnMapoptions = [[MLNMapOptions alloc] init];
+    }
+
     _opaque = NO;
 
     // setup accessibility
@@ -683,8 +739,11 @@ public:
         resourceOptions.withApiKey([apiKey UTF8String]);
     }
 
+    const mbgl::util::ActionJournalOptions& actionJournalOptions = [mlnMapoptions.actionJournalOptions getCoreOptions];
+
     NSAssert(!_mbglMap, @"_mbglMap should be NULL");
-    _mbglMap = std::make_unique<mbgl::Map>(*_rendererFrontend, *_mbglView, mapOptions, resourceOptions, clientOptions);
+    _mbglMap = std::make_unique<mbgl::Map>(*_rendererFrontend, *_mbglView, mapOptions,
+                                           resourceOptions, clientOptions, actionJournalOptions);
 
     // start paused if launch into the background
     if (background) {
@@ -723,6 +782,10 @@ public:
         NSStringFromClass(self.class));
     });
 
+    _showsLogoView = YES;
+    _showsCompassView = YES;
+    _showsAttributionButton = YES;
+
     // setup logo
     //
     UIImage *logo = [UIImage mgl_resourceImageNamed:@"maplibre-logo-stroke-gray"];
@@ -731,6 +794,7 @@ public:
     _logoView.accessibilityLabel = NSLocalizedStringWithDefaultValue(@"LOGO_A11Y_LABEL", nil, nil, @"Mapbox", @"Accessibility label");
     _logoView.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_logoView];
+    _logoView.hidden = !_showsLogoView;
     _logoViewConstraints = [NSMutableArray array];
     _logoViewPosition = MLNOrnamentPositionBottomLeft;
     _logoViewMargins = MLNOrnamentDefaultPositionOffset;
@@ -743,6 +807,7 @@ public:
     [_attributionButton addTarget:self action:@selector(showAttribution:) forControlEvents:UIControlEventTouchUpInside];
     _attributionButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self addSubview:_attributionButton];
+    _attributionButton.hidden = !_showsAttributionButton;
     _attributionButtonConstraints = [NSMutableArray array];
 
     UILongPressGestureRecognizer *attributionLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(showAttribution:)];
@@ -754,6 +819,7 @@ public:
     //
     _compassView = [MLNCompassButton compassButtonWithMapView:self];
     [self addSubview:_compassView];
+    _compassView.hidden = !_showsCompassView;
     _compassViewConstraints = [NSMutableArray array];
     _compassViewPosition = MLNOrnamentPositionTopRight;
     _compassViewMargins = MLNOrnamentDefaultPositionOffset;
@@ -802,6 +868,7 @@ public:
     _pinch.delegate = self;
     [self addGestureRecognizer:_pinch];
     _zoomEnabled = YES;
+    _quickZoomReversed = NO;
 
 #if TARGET_IPHONE_SIMULATOR & (TARGET_CPU_X86 | TARGET_CPU_X86_64)
     if (isM1Simulator) {
@@ -891,6 +958,8 @@ public:
     _targetCoordinate = kCLLocationCoordinate2DInvalid;
 
     _shouldRequestAuthorizationToUseLocationServices = YES;
+
+    _dynamicNavigationCameraAnimationDuration = NO;
 }
 
 - (mbgl::Size)size
@@ -2608,6 +2677,8 @@ public:
     {
         CGFloat distance = [quickZoom locationInView:quickZoom.view].y - self.quickZoomStart;
 
+        if (self.isQuickZoomReversed) distance = - distance;
+
         CGFloat newZoom = MAX(log2f(self.scale) + (distance / 75), *self.mbglMap.getBounds().minZoom);
 
         if ([self zoomLevel] == newZoom) return;
@@ -3124,6 +3195,12 @@ static void *windowScreenContext = &windowScreenContext;
     self.twoFingerTap.enabled = zoomEnabled;
 }
 
+- (void)setQuickZoomReversed:(BOOL)quickZoomReversed
+{
+    MLNLogDebug(@"Setting quickZoomReversed: %@", MLNStringFromBOOL(quickZoomReversed));
+    _quickZoomReversed = quickZoomReversed;
+}
+
 - (void)setScrollEnabled:(BOOL)scrollEnabled
 {
     MLNLogDebug(@"Setting scrollEnabled: %@", MLNStringFromBOOL(scrollEnabled));
@@ -3155,6 +3232,27 @@ static void *windowScreenContext = &windowScreenContext;
     {
         [self updateScaleBar];
     }
+}
+
+- (void)setShowsLogoView:(BOOL)showsLogoView
+{
+    MLNLogDebug(@"Setting showsLogoView: %@", MLNStringFromBOOL(showsLogoView));
+    _showsLogoView = showsLogoView;
+    self.logoView.hidden = !showsLogoView;
+}
+
+- (void)setShowsCompassView:(BOOL)showsCompassView
+{
+    MLNLogDebug(@"Setting showsCompassView: %@", MLNStringFromBOOL(showsCompassView));
+    _showsCompassView = showsCompassView;
+    self.compassView.hidden = !showsCompassView;
+}
+
+- (void)setShowsAttributionButton:(BOOL)showsAttributionButton
+{
+    MLNLogDebug(@"Setting showsAttributionButton: %@", MLNStringFromBOOL(showsAttributionButton));
+    _showsAttributionButton = showsAttributionButton;
+    self.attributionButton.hidden = !showsAttributionButton;
 }
 
 - (void)setScaleBarShouldShowDarkStyles:(BOOL)scaleBarShouldShowDarkStyles {
@@ -3189,6 +3287,46 @@ static void *windowScreenContext = &windowScreenContext;
 - (BOOL)tileCacheEnabled
 {
     return _rendererFrontend->getTileCacheEnabled();
+}
+
+- (void)setTileLodMinRadius:(double)tileLodMinRadius
+{
+    _mbglMap->setTileLodMinRadius(tileLodMinRadius);
+}
+
+- (double)tileLodMinRadius
+{
+    return _mbglMap->getTileLodMinRadius();
+}
+
+- (void)setTileLodScale:(double)tileLodScale
+{
+    _mbglMap->setTileLodScale(tileLodScale);
+}
+
+- (double)tileLodScale
+{
+    return _mbglMap->getTileLodScale();
+}
+
+-(void)setTileLodPitchThreshold:(double)tileLodPitchThreshold
+{
+    _mbglMap->setTileLodPitchThreshold(tileLodPitchThreshold);
+}
+
+-(double)tileLodPitchThreshold
+{
+    return _mbglMap->getTileLodPitchThreshold();
+}
+
+-(void)setTileLodZoomShift:(double)tileLodZoomShift
+{
+    _mbglMap->setTileLodZoomShift(tileLodZoomShift);
+}
+
+-(double)tileLodZoomShift
+{
+    return _mbglMap->getTileLodZoomShift();
 }
 
 // MARK: - Accessibility -
@@ -5873,9 +6011,18 @@ static void *windowScreenContext = &windowScreenContext;
 
 // MARK: - User Location -
 
+
+- (void)disableLocationManager
+{
+    [_locationManager stopUpdatingLocation];
+    [_locationManager stopUpdatingHeading];
+    _locationManager = nil;
+}
+
 - (void)setLocationManager:(nullable id<MLNLocationManager>)locationManager
 {
     MLNLogDebug(@"Setting locationManager: %@", locationManager);
+
     if (!locationManager) {
         locationManager = [[MLNCLLocationManager alloc] init];
     }
@@ -6209,14 +6356,18 @@ static void *windowScreenContext = &windowScreenContext;
         }
     }
 
-    [self didUpdateLocationWithUserTrackingAnimated:animated completionHandler:completion];
-
-    NSTimeInterval duration = MLNAnimationDuration;
+    NSTimeInterval userLocationDuration = MLNAnimationDuration;
     if (oldLocation && ! CGPointEqualToPoint(self.userLocationAnnotationView.center, CGPointZero))
     {
-        duration = MIN([newLocation.timestamp timeIntervalSinceDate:oldLocation.timestamp], MLNUserLocationAnimationDuration);
+        userLocationDuration = MIN([newLocation.timestamp timeIntervalSinceDate:oldLocation.timestamp], MLNUserLocationAnimationDuration);
     }
-    [self updateUserLocationAnnotationViewAnimatedWithDuration:duration];
+    [self updateUserLocationAnnotationViewAnimatedWithDuration:userLocationDuration];
+
+    NSTimeInterval cameraDuration = MLNUserLocationAnimationDuration;
+    if (self.dynamicNavigationCameraAnimationDuration && oldLocation) {
+        cameraDuration = MIN([newLocation.timestamp timeIntervalSinceDate:oldLocation.timestamp], MLNUserLocationAnimationDuration);
+    }
+    [self didUpdateLocationWithUserTrackingDuration:cameraDuration completionHandler:completion];
 
     if (self.userTrackingMode == MLNUserTrackingModeNone &&
         self.userLocationAnnotationView.accessibilityElementIsFocused &&
@@ -6228,10 +6379,16 @@ static void *windowScreenContext = &windowScreenContext;
 
 - (void)didUpdateLocationWithUserTrackingAnimated:(BOOL)animated completionHandler:(nullable void (^)(void))completion
 {
+    [self didUpdateLocationWithUserTrackingDuration:animated ? MLNUserLocationAnimationDuration : 0 completionHandler:completion];
+}
+
+- (void)didUpdateLocationWithUserTrackingDuration:(NSTimeInterval)duration completionHandler:(nullable void (^)(void))completion
+{
     CLLocation *location = self.userLocation.location;
     if ( ! _showsUserLocation || ! location
         || ! CLLocationCoordinate2DIsValid(location.coordinate)
-        || self.userTrackingMode == MLNUserTrackingModeNone)
+        || self.userTrackingMode == MLNUserTrackingModeNone
+        || self.userTrackingState == MLNUserTrackingStateBegan)
     {
         if (completion)
         {
@@ -6260,31 +6417,31 @@ static void *windowScreenContext = &windowScreenContext;
         if (self.userTrackingState != MLNUserTrackingStateBegan)
         {
             // Keep both the user and the destination in view.
-            [self didUpdateLocationWithTargetAnimated:animated completionHandler:completion];
+            [self didUpdateLocationWithTargetAnimated:duration != 0 completionHandler:completion];
         }
     }
     else if (self.userTrackingState == MLNUserTrackingStatePossible)
     {
         // The first location update is often a great distance away from the
         // current viewport, so fly there to provide additional context.
-        [self didUpdateLocationSignificantlyAnimated:animated completionHandler:completion];
+        [self didUpdateLocationSignificantlyAnimated:duration != 0 completionHandler:completion];
     }
     else if (self.userTrackingState == MLNUserTrackingStateChanged)
     {
         // Subsequent updates get a more subtle animation.
-        [self didUpdateLocationIncrementallyAnimated:animated completionHandler:completion];
+        [self didUpdateLocationIncrementallyDuration:duration completionHandler:completion];
     }
     [self unrotateIfNeededAnimated:YES];
 }
 
 /// Changes the viewport based on an incremental location update.
-- (void)didUpdateLocationIncrementallyAnimated:(BOOL)animated completionHandler:(nullable void (^)(void))completion
+- (void)didUpdateLocationIncrementallyDuration:(NSTimeInterval)duration completionHandler:(nullable void (^)(void))completion
 {
     [self _setCenterCoordinate:self.userLocation.location.coordinate
                    edgePadding:self.edgePaddingForFollowing
                      zoomLevel:self.zoomLevel
                      direction:self.directionByFollowingWithCourse
-                      duration:animated ? MLNUserLocationAnimationDuration : 0
+                      duration:duration
        animationTimingFunction:[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionLinear]
              completionHandler:completion];
 }
@@ -6876,8 +7033,7 @@ static void *windowScreenContext = &windowScreenContext;
 }
 
 - (void)mapViewDidFinishRenderingFrameFullyRendered:(BOOL)fullyRendered
-                                  frameEncodingTime:(double)frameEncodingTime
-                                 frameRenderingTime:(double)frameRenderingTime {
+                                     renderingStats:(const mbgl::gfx::RenderingStats &)stats {
     if (!_mbglMap)
     {
         return;
@@ -6889,9 +7045,21 @@ static void *windowScreenContext = &windowScreenContext;
         [self.style didChangeValueForKey:@"layers"];
     }
 
-    if ([self.delegate respondsToSelector:@selector(mapViewDidFinishRenderingFrame:fullyRendered:frameEncodingTime:frameRenderingTime:)])
+    if ([self.delegate respondsToSelector:@selector(mapViewDidFinishRenderingFrame:fullyRendered:renderingStats:)])
     {
-        [self.delegate mapViewDidFinishRenderingFrame:self fullyRendered:fullyRendered frameEncodingTime:frameEncodingTime frameRenderingTime:frameRenderingTime];
+        if (!_renderingStats) {
+            _renderingStats = [[MLNRenderingStats alloc] init];
+        }
+
+        [_renderingStats setCoreData:stats];
+        [self.delegate mapViewDidFinishRenderingFrame:self fullyRendered:fullyRendered renderingStats:_renderingStats];
+    }
+    else if ([self.delegate respondsToSelector:@selector(mapViewDidFinishRenderingFrame:fullyRendered:frameEncodingTime:frameRenderingTime:)])
+    {
+        [self.delegate mapViewDidFinishRenderingFrame:self
+                                        fullyRendered:fullyRendered
+                                    frameEncodingTime:stats.encodingTime
+                                   frameRenderingTime:stats.renderingTime];
     }
     else if ([self.delegate respondsToSelector:@selector(mapViewDidFinishRenderingFrame:fullyRendered:)])
     {
@@ -7520,9 +7688,198 @@ static void *windowScreenContext = &windowScreenContext;
     return _annotationViewReuseQueueByIdentifier[identifier];
 }
 
+- (BOOL)isRenderingStatsViewEnabled {
+    return _mbglMap->isRenderingStatsViewEnabled();
+}
+
+- (void)enableRenderingStatsView:(BOOL)value {
+    _mbglMap->enableRenderingStatsView(value);
+}
+
 - (void)triggerRepaint
 {
     _mbglMap->triggerRepaint();
+}
+
+/**
+ Adds a plug-in layer that is external to this library
+ */
+-(void)addPluginLayerType:(Class)pluginLayerClass {
+
+    auto layerManager = mbgl::LayerManager::get();
+    auto darwinLayerManager = (mbgl::LayerManagerDarwin *)layerManager;
+
+    MLNPluginLayerCapabilities *capabilities = [pluginLayerClass layerCapabilities];
+
+    std::string layerType = [capabilities.layerID UTF8String];
+
+    // Default values
+    mbgl::style::LayerTypeInfo::Source source = mbgl::style::LayerTypeInfo::Source::NotRequired;
+    mbgl::style::LayerTypeInfo::TileKind tileKind = mbgl::style::LayerTypeInfo::TileKind::NotRequired;
+    mbgl::style::LayerTypeInfo::FadingTiles fadingTiles = mbgl::style::LayerTypeInfo::FadingTiles::NotRequired;
+    mbgl::style::LayerTypeInfo::Layout layout = mbgl::style::LayerTypeInfo::Layout::NotRequired;
+    mbgl::style::LayerTypeInfo::CrossTileIndex crossTileIndex = mbgl::style::LayerTypeInfo::CrossTileIndex::NotRequired;
+
+    mbgl::style::LayerTypeInfo::Pass3D pass3D = mbgl::style::LayerTypeInfo::Pass3D::NotRequired;
+    if (capabilities.requiresPass3D) {
+        pass3D = mbgl::style::LayerTypeInfo::Pass3D::Required;
+    }
+
+    auto factory = std::make_unique<mbgl::PluginLayerPeerFactory>(layerType,
+                                               source,
+                                               pass3D,
+                                               layout,
+                                               fadingTiles,
+                                               crossTileIndex,
+                                               tileKind);
+
+    __weak MLNMapView *weakMapView = self;
+
+    Class layerClass = pluginLayerClass;
+    factory->setOnLayerCreatedEvent([layerClass, weakMapView, pluginLayerClass](mbgl::style::PluginLayer *pluginLayer) {
+
+        //NSLog(@"Creating Plugin Layer: %@", layerClass);
+        MLNPluginLayer *layer = [[layerClass alloc] init];
+        if (!weakMapView.pluginLayers) {
+            weakMapView.pluginLayers = [NSMutableArray array];
+        }
+        [weakMapView.pluginLayers addObject:layer];
+
+        // Use weak here so there isn't a retain cycle
+        MLNPluginLayer *weakPlugInLayer = layer;
+
+        pluginLayer->_platformReference = (__bridge void *)layer;
+
+        MLNPluginLayerCapabilities *capabilities = [pluginLayerClass layerCapabilities];
+        auto pluginLayerImpl = (mbgl::style::PluginLayer::Impl *)pluginLayer->baseImpl.get();
+        auto & pm = pluginLayerImpl->_propertyManager;
+        for (MLNPluginLayerProperty *property in capabilities.layerProperties) {
+            mbgl::style::PluginLayerProperty *p = new mbgl::style::PluginLayerProperty();
+            switch (property.propertyType) {
+                case MLNPluginLayerPropertyTypeSingleFloat:
+                    p->_propertyType = mbgl::style::PluginLayerProperty::PropertyType::SingleFloat;
+                    p->_defaultSingleFloatValue = property.singleFloatDefaultValue;
+                    break;
+                case MLNPluginLayerPropertyTypeColor:
+                {
+                    p->_propertyType = mbgl::style::PluginLayerProperty::PropertyType::Color;
+                    if (property.colorDefaultValue) {
+                        CGFloat r, g, b, a;
+                        [property.colorDefaultValue getRed:&r green:&g blue:&b alpha:&a];
+                        p->_defaultColorValue = mbgl::Color(r, g, b, a);
+                    }
+                }
+                    break;
+                default:
+                    p->_propertyType = mbgl::style::PluginLayerProperty::PropertyType::Unknown;
+                    break;
+            }
+            p->_propertyName = [property.propertyName UTF8String];
+            pm.addProperty(p);
+        }
+
+        // Set the render function
+        auto renderFunction = [weakPlugInLayer, weakMapView](mbgl::PaintParameters& paintParameters){
+
+            const mbgl::mtl::RenderPass& renderPass = static_cast<mbgl::mtl::RenderPass&>(*paintParameters.renderPass);
+            id<MTLRenderCommandEncoder> encoder = (__bridge id<MTLRenderCommandEncoder>)renderPass.getMetalEncoder().get();
+
+            MLNMapView *strongMapView = weakMapView;
+
+            const mbgl::TransformState& state = paintParameters.state;
+
+            MLNPluginLayerDrawingContext drawingContext;
+            drawingContext.size = CGSizeMake(state.getSize().width,
+                                             state.getSize().height);
+            drawingContext.centerCoordinate = CLLocationCoordinate2DMake(state.getLatLng().latitude(),
+                                                                         state.getLatLng().longitude());
+            drawingContext.zoomLevel = state.getZoom();
+            drawingContext.direction = mbgl::util::rad2deg(-state.getBearing());
+            drawingContext.pitch = state.getPitch();
+            drawingContext.fieldOfView = state.getFieldOfView();
+            drawingContext.projectionMatrix = MLNMatrix4Make(paintParameters.transformParams.projMatrix);
+            drawingContext.nearClippedProjMatrix = MLNMatrix4Make(paintParameters.transformParams.nearClippedProjMatrix);
+
+            // Call update with the scene state variables
+            [weakPlugInLayer onUpdateLayer:drawingContext];
+
+            // Call render
+            [weakPlugInLayer onRenderLayer:strongMapView
+                             renderEncoder:encoder];
+        };
+
+        // Set the lambdas
+        //auto pluginLayerImpl = (mbgl::style::PluginLayer::Impl *)pluginLayer->baseImpl.get();
+        pluginLayerImpl->setRenderFunction(renderFunction);
+
+        // Set the update properties function
+        pluginLayerImpl->setUpdatePropertiesFunction([weakPlugInLayer](const std::string & jsonProperties) {
+            // Use autorelease pools in lambdas
+            @autoreleasepool {
+                // Just wrap the string with NSData so it can be run through properties
+                NSData *d = [NSData dataWithBytesNoCopy:(void *)jsonProperties.data() length:jsonProperties.length() freeWhenDone:NO];
+                NSError *error = nil;
+                NSDictionary *properties = [NSJSONSerialization JSONObjectWithData:d
+                                                                           options:0
+                                                                             error:&error];
+                if (error) {
+                    // TODO: What should we do here?
+                }
+                [weakPlugInLayer onUpdateLayerProperties:properties];
+            }
+        });
+
+    });
+
+    // TODO: Same question as above.  Do we ever want to have a core only layer type?
+    //       This could actually be something that we could set in the layer capabilities class
+    darwinLayerManager->addLayerType(std::move(factory));
+    //darwinLayerManager->addLayerTypeCoreOnly(std::move(factory));
+
+}
+
+- (NSArray<NSString*>*)getActionJournalLogFiles
+{
+    const auto& actionJournal = _mbglMap->getActionJournal();
+    if (!actionJournal) {
+        return nil;
+    }
+
+    const auto& files = actionJournal->getLogFiles();
+    NSMutableArray<NSString*>* objcFiles = [NSMutableArray new];
+
+    for (const auto& file : files) {
+        [objcFiles addObject:[NSString stringWithUTF8String:file.c_str()]];
+    }
+
+    return objcFiles;
+}
+
+- (NSArray<NSString*>*)getActionJournalLog
+{
+    const auto& actionJournal = _mbglMap->getActionJournal();
+    if (!actionJournal) {
+        return nil;
+    }
+
+    const auto& log = actionJournal->getLog();
+    NSMutableArray<NSString*>* objcLog = [NSMutableArray new];
+
+    for (const auto& event : log) {
+        [objcLog addObject:[NSString stringWithUTF8String:event.c_str()]];
+    }
+
+    return objcLog;
+}
+
+- (void)clearActionJournalLog
+{
+    const auto& actionJournal = _mbglMap->getActionJournal();
+    if (!actionJournal) {
+        return;
+    }
+
+    actionJournal->clearLog();
 }
 
 - (MLNBackendResource *)backendResource {

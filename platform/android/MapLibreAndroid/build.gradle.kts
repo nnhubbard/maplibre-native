@@ -60,7 +60,7 @@ android {
 
     defaultConfig {
         compileSdk = 34
-        minSdk = 21
+        minSdk = 23
         targetSdk = 33
         buildConfigField("String", "GIT_REVISION_SHORT", "\"${getGitRevision()}\"")
         buildConfigField("String", "GIT_REVISION", "\"${getGitRevision(false)}\"")
@@ -74,8 +74,13 @@ android {
 
     flavorDimensions += "renderer"
     productFlavors {
-        create("drawable") {
+        create("opengl") {
             dimension = "renderer"
+            externalNativeBuild {
+                cmake {
+                    arguments("-DMLN_WITH_OPENGL=ON", "-DMLN_WITH_VULKAN=OFF")
+                }
+            }
         }
         create("vulkan") {
             dimension = "renderer"
@@ -88,7 +93,7 @@ android {
     }
 
     sourceSets {
-        getByName("drawable") {
+        getByName("opengl") {
             java.srcDirs("src/opengl/java/")
         }
     }

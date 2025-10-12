@@ -165,8 +165,7 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
     }
 
     if (LayerManager::annotationsEnabled) {
-        auto guard = updateParameters->annotationManager.lock();
-        if (updateParameters->annotationManager) {
+        if (auto guard = updateParameters->annotationManager.lock(); updateParameters->annotationManager) {
             updateParameters->annotationManager->updateData();
         }
     }
@@ -195,9 +194,14 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
                                         .glyphManager = glyphManager,
                                         .prefetchZoomDelta = updateParameters->prefetchZoomDelta,
                                         .threadPool = threadPool,
+                                        .tileLodMinRadius = updateParameters->tileLodMinRadius,
+                                        .tileLodScale = updateParameters->tileLodScale,
+                                        .tileLodPitchThreshold = updateParameters->tileLodPitchThreshold,
+                                        .tileLodZoomShift = updateParameters->tileLodZoomShift,
                                         .dynamicTextureAtlas = dynamicTextureAtlas};
 
     glyphManager->setURL(updateParameters->glyphURL);
+    glyphManager->setFontFaces(updateParameters->fontFaces);
 
     // Update light.
     const bool lightChanged = renderLight.impl != updateParameters->light;
@@ -424,12 +428,13 @@ std::unique_ptr<RenderTree> RenderOrchestrator::createRenderTree(
     }
 
     // Prepare. Update all matrices and generate data that we should upload to the GPU.
-    for (const auto& entry : renderSources) {
+    for (const auto& [name, renderSource] : renderSources) {
         MLN_TRACE_ZONE(prepare source);
-        if (entry.second->isEnabled()) {
-            entry.second->prepare({.transform = renderTreeParameters->transformParams,
+        if (renderSource->isEnabled()) {
+            renderSource->prepare({.transform = renderTreeParameters->transformParams,
                                    .debugOptions = updateParameters->debugOptions,
-                                   .imageManager = *imageManager});
+                                   .imageManager = *imageManager,
+                                   .sourceName = name});
         }
     }
 
@@ -1019,10 +1024,16 @@ void RenderOrchestrator::onGlyphsError(const FontStack& fontStack,
                                        std::exception_ptr error) {
     MLN_TRACE_FUNC();
 
-    Log::Error(Event::Style,
-               "Failed to load glyph range " + std::to_string(glyphRange.first) + "-" +
-                   std::to_string(glyphRange.second) + " for font stack " + fontStackToString(fontStack) + ": " +
-                   util::toString(error));
+    std::stringstream ss;
+    ss << "Failed to load glyph range ";
+    if (glyphRange.type == FontPBF) {
+        ss << glyphRange.first << "-" << glyphRange.second;
+    } else {
+        ss << (int)glyphRange.type << "(font file)";
+    }
+    ss << " for font stack " << fontStackToString(fontStack) << ":( " << util::toString(error) << ")";
+    auto errorDetail = ss.str();
+    Log::Error(Event::Style, errorDetail);
     observer->onResourceError(error);
 }
 
