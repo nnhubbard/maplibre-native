@@ -599,6 +599,18 @@ MLN_EXPORT
 @property (nonatomic, assign) BOOL dynamicNavigationCameraAnimationDuration;
 
 /**
+ The zoom level to use when the map transitions into user tracking mode
+ while the current zoom level is below the value of this property.
+
+ When user tracking mode is set to a value other than
+ ``MLNUserTrackingMode/MLNUserTrackingModeNone`` and the current zoom level
+ is below this value, the map automatically zooms in to this level.
+
+ The default value of this property is 14.
+ */
+@property (nonatomic, assign) double userTrackingModeZoomLevel;
+
+/**
  A Boolean value indicating whether the map may request authorization to use location services.
 
  Setting this property to `YES` causes the map view to use the Core Location

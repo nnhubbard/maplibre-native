@@ -881,6 +881,7 @@ public:
     _rotateEnabled = YES;
     _rotationThresholdWhileZooming = 3;
     _toleranceForSnappingToNorth = 7;
+    _userTrackingModeZoomLevel = MLNDefaultZoomLevelForUserTracking;
 
     _doubleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleDoubleTapGesture:)];
     _doubleTap.numberOfTapsRequired = 2;
@@ -6473,9 +6474,9 @@ static void *windowScreenContext = &windowScreenContext;
     MLNMapCamera *camera = self.camera;
     camera.centerCoordinate = self.userLocation.location.coordinate;
     camera.heading = self.directionByFollowingWithCourse;
-    if (self.zoomLevel < MLNMinimumZoomLevelForUserTracking)
+    if (self.zoomLevel < self.userTrackingModeZoomLevel)
     {
-        camera.altitude = MLNAltitudeForZoomLevel(MLNDefaultZoomLevelForUserTracking,
+        camera.altitude = MLNAltitudeForZoomLevel(self.userTrackingModeZoomLevel,
                                                   camera.pitch,
                                                   camera.centerCoordinate.latitude,
                                                   self.frame.size);
